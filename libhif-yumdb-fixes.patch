@@ -1,0 +1,394 @@
+From 33f43598f87f05ddd5676081a1ac437d26940fcc Mon Sep 17 00:00:00 2001
+From: Kalev Lember <klember@redhat.com>
+Date: Tue, 3 Nov 2015 15:28:11 +0100
+Subject: [PATCH 1/3] Correctly set yumdb "reason" when updating / installing
+ packages
+
+DNF keeps track of what packages are user installed leaf packages and
+what are automatically installed dependencies by looking at yumdb
+"reason" entry. Normally, user installed packages are marked as "user"
+and dependencies as "dep". This gives DNF enough information to clean up
+any unused dependencies when uninstalling leaf packages.
+
+However, libhif/PackageKit had multiple bugs in this area which resulted
+in us writing "dep" in yumdb for all packages and causing DNF to want to
+remove any packages that PackageKit had touched.
+
+This commit reimplements the "reason" setting code so that we a) for
+newly installed packages mark the leaf packages as "user" and
+dependencies as "dep", and b) for updates/downgrades/reinstalls carry
+over the old yumdb entry.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1259865
+---
+ libhif/hif-context.c     |  3 --
+ libhif/hif-transaction.c | 88 ++++++++++++++++++++++++++++++++++++++++++++----
+ 2 files changed, 81 insertions(+), 10 deletions(-)
+
+diff --git a/libhif/hif-context.c b/libhif/hif-context.c
+index afbb561..787c508 100644
+--- a/libhif/hif-context.c
++++ b/libhif/hif-context.c
+@@ -1506,7 +1506,6 @@ hif_context_install (HifContext *context, const gchar *name, GError **error)
+ 
+ 	/* add each package */
+ 	FOR_PACKAGELIST(pkg, pkglist, i) {
+-		hif_package_set_user_action (pkg, TRUE);
+ 		g_debug ("adding %s-%s to goal", hy_package_get_name (pkg), hy_package_get_evr (pkg));
+ 		hy_goal_install (priv->goal, pkg);
+ 	}
+@@ -1557,7 +1556,6 @@ hif_context_remove (HifContext *context, const gchar *name, GError **error)
+ 
+ 	/* add each package */
+ 	FOR_PACKAGELIST(pkg, pkglist, i) {
+-		hif_package_set_user_action (pkg, TRUE);
+ 		hy_goal_erase (priv->goal, pkg);
+ 	}
+ 	hy_packagelist_free (pkglist);
+@@ -1609,7 +1607,6 @@ hif_context_update (HifContext *context, const gchar *name, GError **error)
+ 
+ 	/* add each package */
+ 	FOR_PACKAGELIST(pkg, pkglist, i) {
+-		hif_package_set_user_action (pkg, TRUE);
+ 		if (hif_package_is_installonly (pkg))
+ 			hy_goal_install (priv->goal, pkg);
+ 		else
+diff --git a/libhif/hif-transaction.c b/libhif/hif-transaction.c
+index 132b5b2..aec8351 100644
+--- a/libhif/hif-transaction.c
++++ b/libhif/hif-transaction.c
+@@ -71,6 +71,7 @@ struct _HifTransactionPrivate
+ 	GPtrArray		*remove_helper;
+ 	GPtrArray		*install;
+ 	GPtrArray		*pkgs_to_download;
++	GHashTable		*erased_by_package_hash;
+ 	guint64			 flags;
+ };
+ 
+@@ -101,6 +102,8 @@ hif_transaction_finalize (GObject *object)
+ 		g_ptr_array_unref (priv->remove);
+ 	if (priv->remove_helper != NULL)
+ 		g_ptr_array_unref (priv->remove_helper);
++	if (priv->erased_by_package_hash != NULL)
++		g_hash_table_unref (priv->erased_by_package_hash);
+ 	if (priv->context != NULL)
+ 		g_object_remove_weak_pointer (G_OBJECT (priv->context),
+ 		                              (void **) &priv->context);
+@@ -888,6 +891,48 @@ hif_transaction_delete_packages (HifTransaction *transaction,
+ 	return TRUE;
+ }
+ 
++static gchar *
++hif_transaction_get_propagated_reason (HifTransaction *transaction,
++                                       HyGoal goal,
++                                       HyPackage pkg)
++{
++	HifTransactionPrivate *priv = GET_PRIVATE (transaction);
++
++	/* kernel is always marked as "user" */
++	if (hif_package_is_installonly (pkg))
++		return g_strdup ("user");
++
++	/* for updates, propagate updated package's reason from existing yumdb entry */
++	if (hif_package_get_action (pkg) == HIF_STATE_ACTION_DOWNGRADE ||
++	    hif_package_get_action (pkg) == HIF_STATE_ACTION_REINSTALL ||
++	    hif_package_get_action (pkg) == HIF_STATE_ACTION_UPDATE) {
++		HyPackage erased_package;
++
++		erased_package = g_hash_table_lookup (priv->erased_by_package_hash, hif_package_get_id (pkg));
++		if (erased_package != NULL) {
++			gchar *reason;
++
++			reason = hif_db_get_string (priv->db, erased_package, "reason", NULL);
++			if (reason != NULL) {
++				g_debug ("propagating yumdb reason %s from %s to %s",
++				         reason,
++				         hif_package_get_id (erased_package),
++				         hif_package_get_id (pkg));
++				return reason;
++			}
++		}
++		return g_strdup ("dep");
++	}
++
++	/* for non-upgrades, packages explicitly passed to hawkey for
++	 * installation get "user" and dependencies it adds on its own get
++	 * "dep" */
++	if (hy_goal_get_reason (goal, pkg) == HY_REASON_USER)
++		return g_strdup ("user");
++	else
++		return g_strdup ("dep");
++}
++
+ /**
+  * hif_transaction_write_yumdb_install_item:
+  *
+@@ -896,6 +941,7 @@ hif_transaction_delete_packages (HifTransaction *transaction,
+  **/
+ static gboolean
+ hif_transaction_write_yumdb_install_item (HifTransaction *transaction,
++					  HyGoal goal,
+ 					  HyPackage pkg,
+ 					  HifState *state,
+ 					  GError **error)
+@@ -903,6 +949,7 @@ hif_transaction_write_yumdb_install_item (HifTransaction *transaction,
+ 	HifTransactionPrivate *priv = GET_PRIVATE (transaction);
+ 	const gchar *tmp;
+ 	_cleanup_free_ gchar *euid = NULL;
++	_cleanup_free_ gchar *reason = NULL;
+ 
+ 	/* should be set by hif_transaction_ts_progress_cb () */
+ 	if (hif_package_get_pkgid (pkg) == NULL) {
+@@ -928,13 +975,9 @@ hif_transaction_write_yumdb_install_item (HifTransaction *transaction,
+ 		return FALSE;
+ 
+ 	/* set the correct reason */
+-	if (hif_package_get_user_action (pkg)) {
+-		if (!hif_db_set_string (priv->db, pkg, "reason", "user", error))
+-			return FALSE;
+-	} else {
+-		if (!hif_db_set_string (priv->db, pkg, "reason", "dep", error))
+-			return FALSE;
+-	}
++	reason = hif_transaction_get_propagated_reason (transaction, goal, pkg);
++	if (!hif_db_set_string (priv->db, pkg, "reason", reason, error))
++		return FALSE;
+ 
+ 	/* set the correct release */
+ 	tmp = hif_context_get_release_ver (priv->context);
+@@ -959,6 +1002,7 @@ _hif_state_get_step_multiple_pair (guint first, guint second)
+  **/
+ static gboolean
+ hif_transaction_write_yumdb (HifTransaction *transaction,
++			     HyGoal goal,
+ 			     HifState *state,
+ 			     GError **error)
+ {
+@@ -1011,6 +1055,7 @@ hif_transaction_write_yumdb (HifTransaction *transaction,
+ 		pkg = g_ptr_array_index (priv->install, i);
+ 		state_loop = hif_state_get_child (state_local);
+ 		ret = hif_transaction_write_yumdb_install_item (transaction,
++								goal,
+ 								pkg,
+ 								state_loop,
+ 								error);
+@@ -1145,6 +1190,10 @@ hif_transaction_reset (HifTransaction *transaction)
+ 		g_ptr_array_unref (priv->remove_helper);
+ 		priv->remove_helper = NULL;
+ 	}
++	if (priv->erased_by_package_hash != NULL) {
++		g_hash_table_unref (priv->erased_by_package_hash);
++		priv->erased_by_package_hash = NULL;
++	}
+ }
+ 
+ /**
+@@ -1179,6 +1228,7 @@ hif_transaction_commit (HifTransaction *transaction,
+ 	guint i;
+ 	guint j;
+ 	HifState *state_local;
++	HyPackageList all_obsoleted;
+ 	HyPackageList pkglist;
+ 	HyPackage pkg;
+ 	HyPackage pkg_tmp;
+@@ -1329,6 +1379,29 @@ hif_transaction_commit (HifTransaction *transaction,
+ 		hy_packagelist_free (pkglist);
+ 	}
+ 
++	/* map updated packages to their previous versions */
++	priv->erased_by_package_hash = g_hash_table_new_full (g_str_hash, g_str_equal,
++	                                                      g_free, (GDestroyNotify) hy_package_free);
++	all_obsoleted = hy_goal_list_obsoleted (goal);
++	for (i = 0; i < priv->install->len; i++) {
++		pkg = g_ptr_array_index (priv->install, i);
++		if (hif_package_get_action (pkg) != HIF_STATE_ACTION_UPDATE &&
++		    hif_package_get_action (pkg) != HIF_STATE_ACTION_DOWNGRADE &&
++		    hif_package_get_action (pkg) != HIF_STATE_ACTION_REINSTALL)
++			continue;
++
++		pkglist = hy_goal_list_obsoleted_by_package (goal, pkg);
++		FOR_PACKAGELIST(pkg_tmp, pkglist, j) {
++			if (!hy_packagelist_has (all_obsoleted, pkg_tmp)) {
++				g_hash_table_insert (priv->erased_by_package_hash,
++				                     g_strdup (hif_package_get_id (pkg)),
++				                     hy_package_link (pkg_tmp));
++			}
++		}
++		hy_packagelist_free (pkglist);
++	}
++	hy_packagelist_free (all_obsoleted);
++
+ 	/* this section done */
+ 	ret = hif_state_done (state, error);
+ 	if (!ret)
+@@ -1415,6 +1488,7 @@ hif_transaction_commit (HifTransaction *transaction,
+ 	/* write to the yumDB */
+ 	state_local = hif_state_get_child (state);
+ 	ret = hif_transaction_write_yumdb (transaction,
++					   goal,
+ 					   state_local,
+ 					   error);
+ 	if (!ret)
+-- 
+2.7.3
+
+
+From edf721aa44302596033200699af75720da1a062d Mon Sep 17 00:00:00 2001
+From: Kalev Lember <klember@redhat.com>
+Date: Wed, 20 Apr 2016 21:46:58 +0200
+Subject: [PATCH 2/3] Write new entries to yumdb before removing old ones
+
+This makes it possible to read back and propagate the "reason" yumdb
+entry when doing package updates.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1259865
+---
+ libhif/hif-transaction.c | 54 ++++++++++++++++++++++++------------------------
+ 1 file changed, 27 insertions(+), 27 deletions(-)
+
+diff --git a/libhif/hif-transaction.c b/libhif/hif-transaction.c
+index aec8351..140a764 100644
+--- a/libhif/hif-transaction.c
++++ b/libhif/hif-transaction.c
+@@ -1014,40 +1014,18 @@ hif_transaction_write_yumdb (HifTransaction *transaction,
+ 	guint i;
+ 	guint steps_auto;
+ 
+-	steps_auto = _hif_state_get_step_multiple_pair (priv->remove->len,
+-							priv->install->len);
++	steps_auto = _hif_state_get_step_multiple_pair (priv->install->len,
++							priv->remove->len);
+ 	ret = hif_state_set_steps (state,
+ 				   error,
+-				   steps_auto,		/* remove */
+-				   100 - steps_auto,	/* install */
++				   steps_auto,		/* install */
++				   100 - steps_auto,	/* remove */
+ 				   -1);
+ 	if (!ret)
+ 		return FALSE;
+ 
+-	/* remove all the old entries */
+-	state_local = hif_state_get_child (state);
+-	if (priv->remove->len > 0)
+-		hif_state_set_number_steps (state_local,
+-					    priv->remove->len);
+-	for (i = 0; i < priv->remove->len; i++) {
+-		pkg = g_ptr_array_index (priv->remove, i);
+-		ret = hif_transaction_ensure_source (transaction, pkg, error);
+-		if (!ret)
+-			return FALSE;
+-		ret = hif_db_remove_all (priv->db,
+-					 pkg,
+-					 error);
+-		if (!ret)
+-			return FALSE;
+-		if (!hif_state_done (state_local, error))
+-			return FALSE;
+-	}
+-
+-	/* this section done */
+-	if (!hif_state_done (state, error))
+-		return FALSE;
+-
+ 	/* add all the new entries */
++	state_local = hif_state_get_child (state);
+ 	if (priv->install->len > 0)
+ 		hif_state_set_number_steps (state_local,
+ 					    priv->install->len);
+@@ -1066,6 +1044,28 @@ hif_transaction_write_yumdb (HifTransaction *transaction,
+ 	}
+ 
+ 	/* this section done */
++	if (!hif_state_done (state, error))
++		return FALSE;
++
++	/* remove all the old entries */
++	if (priv->remove->len > 0)
++		hif_state_set_number_steps (state_local,
++					    priv->remove->len);
++	for (i = 0; i < priv->remove->len; i++) {
++		pkg = g_ptr_array_index (priv->remove, i);
++		ret = hif_transaction_ensure_source (transaction, pkg, error);
++		if (!ret)
++			return FALSE;
++		ret = hif_db_remove_all (priv->db,
++					 pkg,
++					 error);
++		if (!ret)
++			return FALSE;
++		if (!hif_state_done (state_local, error))
++			return FALSE;
++	}
++
++	/* this section done */
+ 	return hif_state_done (state, error);
+ }
+ 
+-- 
+2.7.3
+
+
+From 2d50a72a66d40cb9a47307008b5999896633016d Mon Sep 17 00:00:00 2001
+From: Kalev Lember <klember@redhat.com>
+Date: Thu, 21 Apr 2016 12:59:46 +0200
+Subject: [PATCH 3/3] Clean up all old yumdb entries when updating packages
+
+When writing out yumdb updates, make sure to delete old entries for
+packages we're updating. Previously, we would only clean up old entries
+for packages that got explicitly removed; this makes sure that we also
+remove entries for previous versions when doing package updates.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1259865
+---
+ libhif/hif-transaction.c | 19 ++++++++++++++++---
+ 1 file changed, 16 insertions(+), 3 deletions(-)
+
+diff --git a/libhif/hif-transaction.c b/libhif/hif-transaction.c
+index 140a764..ee07859 100644
+--- a/libhif/hif-transaction.c
++++ b/libhif/hif-transaction.c
+@@ -1015,7 +1015,7 @@ hif_transaction_write_yumdb (HifTransaction *transaction,
+ 	guint steps_auto;
+ 
+ 	steps_auto = _hif_state_get_step_multiple_pair (priv->install->len,
+-							priv->remove->len);
++							priv->remove->len + priv->remove_helper->len);
+ 	ret = hif_state_set_steps (state,
+ 				   error,
+ 				   steps_auto,		/* install */
+@@ -1048,9 +1048,9 @@ hif_transaction_write_yumdb (HifTransaction *transaction,
+ 		return FALSE;
+ 
+ 	/* remove all the old entries */
+-	if (priv->remove->len > 0)
++	if ((priv->remove->len + priv->remove_helper->len) > 0)
+ 		hif_state_set_number_steps (state_local,
+-					    priv->remove->len);
++					    priv->remove->len + priv->remove_helper->len);
+ 	for (i = 0; i < priv->remove->len; i++) {
+ 		pkg = g_ptr_array_index (priv->remove, i);
+ 		ret = hif_transaction_ensure_source (transaction, pkg, error);
+@@ -1064,6 +1064,19 @@ hif_transaction_write_yumdb (HifTransaction *transaction,
+ 		if (!hif_state_done (state_local, error))
+ 			return FALSE;
+ 	}
++	for (i = 0; i < priv->remove_helper->len; i++) {
++		pkg = g_ptr_array_index (priv->remove_helper, i);
++		ret = hif_transaction_ensure_source (transaction, pkg, error);
++		if (!ret)
++			return FALSE;
++		ret = hif_db_remove_all (priv->db,
++					 pkg,
++					 error);
++		if (!ret)
++			return FALSE;
++		if (!hif_state_done (state_local, error))
++			return FALSE;
++	}
+ 
+ 	/* this section done */
+ 	return hif_state_done (state, error);
+-- 
+2.7.3
+
