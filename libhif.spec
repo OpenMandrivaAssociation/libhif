@@ -1,6 +1,8 @@
-%global major 1
+%define major 1
+%define api 1.0
 %define libname %mklibname hif %major
 %define devname %mklibname -d hif
+%define libgir %mklibname hif-gir %{api} %{major}
 
 Summary:   Simple package library built on top of hawkey and librepo
 Name:      libhif
@@ -13,15 +15,17 @@ Source0:   http://people.freedesktop.org/~hughsient/releases/libhif-%{version}.t
 
 # Patches from Fedora
 Patch0:    libhif-yumdb-fixes.patch
+# rpm5 adoptation
+Patch1:    rpm5-adoptation.patch
 
 BuildRequires: pkgconfig(glib-2.0)
 BuildRequires: libtool
 BuildRequires: docbook-utils
 BuildRequires: gtk-doc
 BuildRequires: pkgconfig(gobject-introspection-1.0)
-BuildRequires: hawkey-devel >= 0.4.6
-BuildRequires: rpm-devel >= 4.11.0
-BuildRequires: librepo-devel >= 1.7.11
+BuildRequires: hawkey-devel
+BuildRequires: rpm-devel
+BuildRequires: pkgconfig(librepo)
 BuildRequires: pkgconfig(libsolv)
 
 # Bootstrap build requirements
@@ -39,11 +43,21 @@ Group:   System/Libraries
 This library provides a simple interface to hawkey and librepo and is currently
 used by PackageKit and rpm-ostree.
 
+%package -n %{libgir}
+Summary: Simple package library built on top of hawkey and librepo
+Group:   System/Libraries
+Requires: %{libname} = %{EVRD}
+
+%description -n %{libgir}
+This library provides a simple interface to hawkey and librepo and is currently
+used by PackageKit and rpm-ostree.
+
 %package -n %{devname}
 Summary: GLib Libraries and headers for libhif
 Group:   Development/C
-Provides: %{name}-devel = %{?epoch:%{epoch}:}%{version}-%{release}
-Requires: %{libname}%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
+Provides: %{name}-devel = %{EVRD}
+Requires: %{libname} = %{EVRD}
+Requires: %{libgir} = %{EVRD}
 
 %description -n %{devname}
 GLib headers and libraries for libhif.
@@ -54,6 +68,8 @@ GLib headers and libraries for libhif.
 
 # for patch2
 rm -f configure
+libtoolize --copy --force
+autoreconf -fiv
 
 %build
 # Support builds of both git snapshots and tarballs
@@ -65,6 +81,7 @@ rm -f configure
         --disable-silent-rules
 )
 
+mkdir %{name}/%{_lib}
 %make
 
 %install
@@ -75,6 +92,8 @@ rm -f %{buildroot}%{_libdir}/libhif*.la
 %files -n %{libname}
 %{_libdir}/libhif.so.%{major}
 %{_libdir}/libhif.so.%{major}.*
+
+%files -n %{libgir}
 %{_libdir}/girepository-1.0/*.typelib
 
 %files -n %{devname}
