@@ -78,8 +78,7 @@ rm -f %{buildroot}%{_libdir}/libhif*.la
 %{_libdir}/girepository-1.0/*.typelib
 
 %files -n %{devname}
-%license COPYING
-%doc README.md AUTHORS NEWS
+%doc README.md AUTHORS NEWS COPYING
 %{_libdir}/libhif.so
 %{_libdir}/pkgconfig/libhif.pc
 %dir %{_includedir}/libhif
