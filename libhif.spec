@@ -65,7 +65,7 @@ rm -f configure
         --disable-silent-rules
 )
 
-%make_build
+%make
 
 %install
 %make_install
@@ -73,43 +73,16 @@ rm -f configure
 rm -f %{buildroot}%{_libdir}/libhif*.la
 
 %files -n %{libname}
-%license COPYING
-%doc README.md AUTHORS NEWS
 %{_libdir}/libhif.so.%{major}
 %{_libdir}/libhif.so.%{major}.*
 %{_libdir}/girepository-1.0/*.typelib
 
 %files -n %{devname}
+%license COPYING
+%doc README.md AUTHORS NEWS
 %{_libdir}/libhif.so
 %{_libdir}/pkgconfig/libhif.pc
 %dir %{_includedir}/libhif
 %{_includedir}/libhif/*.h
 %{_datadir}/gtk-doc
 %{_datadir}/gir-1.0/*.gir
-
-
-
-%changelog
-* Fri Apr 29 2016 ngompa <ngompa> 0.2.2-2.mga6
-+ Revision: 1007645
-- Fix from Fedora to properly set dnf yumdb 'reason' (rhbz#1259865)
-
-  + tv <tv>
-    - use the same description everywhere
-
-* Sun Mar 13 2016 tv <tv> 0.2.2-1.mga6
-+ Revision: 990124
-- new release
-
-* Mon Feb 15 2016 umeabot <umeabot> 0.2.1-7.mga6
-+ Revision: 961035
-- Mageia 6 Mass Rebuild
-
-* Thu Oct 15 2015 shlomif <shlomif> 0.2.1-6.mga6
-+ Revision: 891736
-- Correct to autoconf2.5.x - patch thanks to Neal Gompa
-
-* Sun Oct 04 2015 shlomif <shlomif> 0.2.1-5.mga6
-+ Revision: 886249
-- Importing libhif from Neal Gompa
-
