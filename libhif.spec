@@ -7,7 +7,7 @@
 Summary:   Simple package library built on top of hawkey and librepo
 Name:      libhif
 Group:     System/Libraries
-Version:   0.2.2
+Version:   0.2.3
 Release:   1
 License:   LGPLv2+
 URL:       https://github.com/hughsie/libhif
