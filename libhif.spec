@@ -13,8 +13,6 @@ License:   LGPLv2+
 URL:       https://github.com/hughsie/libhif
 Source0:   http://people.freedesktop.org/~hughsient/releases/libhif-%{version}.tar.xz
 
-# Patches from Fedora
-Patch0:    libhif-yumdb-fixes.patch
 # rpm5 adoptation
 Patch1:    rpm5-adoptation.patch
 
