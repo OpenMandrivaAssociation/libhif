@@ -7,14 +7,12 @@
 Summary:   Simple package library built on top of hawkey and librepo
 Name:      libhif
 Group:     System/Libraries
-Version:   0.2.2
+Version:   0.2.3
 Release:   1
 License:   LGPLv2+
 URL:       https://github.com/hughsie/libhif
 Source0:   http://people.freedesktop.org/~hughsient/releases/libhif-%{version}.tar.xz
 
-# Patches from Fedora
-Patch0:    libhif-yumdb-fixes.patch
 # rpm5 adoptation
 Patch1:    rpm5-adoptation.patch
 
