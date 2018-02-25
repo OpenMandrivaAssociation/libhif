@@ -4,58 +4,54 @@
 %define devname %mklibname -d hif
 %define libgir %mklibname hif-gir %{api} %{major}
 
-Summary:   Simple package library built on top of hawkey and librepo
-Name:      libhif
-Group:     System/Libraries
-Version:   0.2.3
-Release:   1
-License:   LGPLv2+
-URL:       https://github.com/hughsie/libhif
-Source0:   http://people.freedesktop.org/~hughsient/releases/libhif-%{version}.tar.xz
+Summary:	Simple package library built on top of hawkey and librepo
+Name:		libhif
+Group:		System/Libraries
+Version:	0.2.3
+Release:	1
+License:	LGPLv2+
+URL:		https://github.com/hughsie/libhif
+Source0:	http://people.freedesktop.org/~hughsient/releases/libhif-%{version}.tar.xz
 
 # rpm5 adoptation
-Patch1:    rpm5-adoptation.patch
+Patch1:		rpm5-adoptation.patch
 
-BuildRequires: pkgconfig(glib-2.0)
-BuildRequires: libtool
-BuildRequires: docbook-utils
-BuildRequires: gtk-doc
-BuildRequires: pkgconfig(gobject-introspection-1.0)
-BuildRequires: hawkey-devel
-BuildRequires: rpm-devel
-BuildRequires: pkgconfig(librepo)
-BuildRequires: pkgconfig(libsolv)
-
-# Bootstrap build requirements
-BuildRequires: automake autoconf libtool
+BuildRequires:	pkgconfig(glib-2.0)
+BuildRequires:	docbook-utils
+BuildRequires:	gtk-doc
+BuildRequires:	pkgconfig(gobject-introspection-1.0)
+BuildRequires:	hawkey-devel
+BuildRequires:	pkgconfig(rpm)
+BuildRequires:	pkgconfig(librepo)
+BuildRequires:	pkgconfig(libsolv)
 
 %description
 This library provides a simple interface to hawkey and librepo and is currently
 used by PackageKit and rpm-ostree.
 
 %package -n %{libname}
-Summary: Simple package library built on top of hawkey and librepo
-Group:   System/Libraries
+Summary:	Simple package library built on top of hawkey and librepo
+Group:		System/Libraries
 
 %description -n %{libname}
 This library provides a simple interface to hawkey and librepo and is currently
 used by PackageKit and rpm-ostree.
 
 %package -n %{libgir}
-Summary: Simple package library built on top of hawkey and librepo
-Group:   System/Libraries
-Requires: %{libname} = %{EVRD}
+Summary:	Simple package library built on top of hawkey and librepo
+Group:		System/Libraries
+Requires:	%{libname} = %{EVRD}
 
 %description -n %{libgir}
 This library provides a simple interface to hawkey and librepo and is currently
 used by PackageKit and rpm-ostree.
 
 %package -n %{devname}
-Summary: GLib Libraries and headers for libhif
-Group:   Development/C
-Provides: %{name}-devel = %{EVRD}
-Requires: %{libname} = %{EVRD}
-Requires: %{libgir} = %{EVRD}
+Summary:	GLib Libraries and headers for libhif
+Group:		Development/C
+Provides:	%{name}-devel = %{EVRD}
+Requires:	%{libname} = %{EVRD}
+Requires:	%{libgir} = %{EVRD}
 
 %description -n %{devname}
 GLib headers and libraries for libhif.
@@ -83,13 +79,12 @@ mkdir %{name}/%{_lib}
 %make
 
 %install
-%make_install
+%makeinstall_std
 
 rm -f %{buildroot}%{_libdir}/libhif*.la
 
 %files -n %{libname}
-%{_libdir}/libhif.so.%{major}
-%{_libdir}/libhif.so.%{major}.*
+%{_libdir}/libhif.so.%{major}*
 
 %files -n %{libgir}
 %{_libdir}/girepository-1.0/*.typelib
