@@ -58,7 +58,7 @@ GLib headers and libraries for libhif.
 
 %prep
 %setup -q
-%apply_patches
+%autopatch -p1
 
 # for patch2
 rm -f configure
